@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {speechResponse, openAISpeechResponse, DEFAULT_SPEECH_MODEL} from '../src/speech.js';
+import {speechResponse, openAISpeechResponse, mistralSpeechResponse, DEFAULT_SPEECH_MODEL, MISTRAL_SPEECH_BASE, MISTRAL_SPEECH_MODEL} from '../src/speech.js';
 
 const key = 'synthetic-key-not-real';
 const entry = name => ({name:'models/' + name, supportedGenerationMethods:['generateContent']});
@@ -142,6 +142,58 @@ test('OpenAI speech reports alloy, preserves the entire allowed transcript and r
     assert.deepEqual(await response.json(),{mimeType:'audio/mpeg',audioBase64:'SUQz',voice:'alloy',model:'gpt-4o-mini-tts'});
     assert.equal(calls,1);
   } finally {globalThis.fetch = original;}
+});
+
+test('Mistral speech sends the fixed Voxtral model and picks the preset voice by transcript language', async () => {
+  const original = globalThis.fetch, calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push(JSON.parse(options.body));
+    assert.equal(url, MISTRAL_SPEECH_BASE + '/audio/speech');
+    assert.equal(options.redirect, 'manual');
+    assert.equal(options.headers.Authorization, 'Bearer ' + key);
+    return Response.json({audio_data: 'UklGRg=='});
+  };
+  try {
+    const models = await (await mistralSpeechResponse({action: 'models'}, {apiKey: key})).json();
+    assert.deepEqual(models.models, [MISTRAL_SPEECH_MODEL]);
+    assert.equal(models.default_model, MISTRAL_SPEECH_MODEL);
+    assert.equal(models.verified, false);
+    assert.equal((await mistralSpeechResponse({text: 'Xin chào', speech_model: 'other-tts'}, {apiKey: key})).status, 400);
+    assert.equal((await mistralSpeechResponse({text: 'x'.repeat(4001)}, {apiKey: key})).status, 400);
+    assert.equal((await mistralSpeechResponse({text: '', action: 'peek'}, {apiKey: key})).status, 400);
+    assert.equal(calls.length, 0);
+    for (const [text, voice_id, voice] of [
+      ['こんにちは。練習しましょう。', 'voice_3133', 'Haruto'],
+      ['Xin chào. こんにちは。', 'voice_3144', 'Huong'],
+      ['Hôm nay em học chữ cái.', 'voice_3144', 'Huong']
+    ]) {
+      const response = await mistralSpeechResponse({text}, {apiKey: key});
+      assert.equal(response.status, 200);
+      const data = await response.json();
+      assert.equal(data.voice, voice);
+      assert.equal(data.mimeType, 'audio/mpeg');
+      assert.equal(data.audioBase64, 'UklGRg==');
+      assert.deepEqual(calls.at(-1), {model: MISTRAL_SPEECH_MODEL, voice_id, input: text, response_format: 'mp3'});
+    }
+    assert.equal(calls.length, 3);
+  } finally { globalThis.fetch = original; }
+});
+
+test('Mistral speech maps provider failures without leaking upstream bodies or retrying', async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const [status, http, code] of [[401, 403, 'tts_key_rejected'], [403, 403, 'tts_key_rejected'], [404, 409, 'speech_model_missing'], [429, 429, 'tts_quota'], [503, 503, 'tts_unavailable']]) {
+      let calls = 0;
+      globalThis.fetch = async () => { calls++; return Response.json({error: {message: key}}, {status}); };
+      const response = await mistralSpeechResponse({text: 'こんにちは'}, {apiKey: key}), body = await response.json();
+      assert.equal(response.status, http);
+      assert.equal(body.code, code);
+      assert.equal(calls, 1);
+      assert.ok(!JSON.stringify(body).includes(key));
+    }
+    globalThis.fetch = async () => Response.json({});
+    assert.equal((await mistralSpeechResponse({text: 'こんにちは'}, {apiKey: key})).status, 503);
+  } finally { globalThis.fetch = original; }
 });
 
 test('OpenAI speech sanitizes upstream failures and empty audio without retrying or changing voice', async () => {

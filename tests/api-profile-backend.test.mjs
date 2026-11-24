@@ -504,6 +504,38 @@ test('device Gemini TTS accepts an empty chat model but retains connection/key v
   } finally {globalThis.fetch=previous;}
 });
 
+test('device and saved Mistral TTS hit the official audio/speech endpoint only', async () => {
+  const f = await fixture(), previous = globalThis.fetch;
+  const mistral = {protocol:'openai',base_url:'https://api.mistral.ai/v1',model:'',api_key:'device-mistral-key'};
+  let calls = 0;
+  globalThis.fetch = async (url, options) => {
+    calls++;
+    assert.equal(url,'https://api.mistral.ai/v1/audio/speech');
+    assert.equal(options.redirect,'manual');
+    assert.equal(options.headers.Authorization,'Bearer device-mistral-key');
+    const sent = JSON.parse(options.body);
+    assert.deepEqual(Object.keys(sent).sort(),['input','model','response_format','voice_id'].sort());
+    assert.equal(sent.model,'voxtral-mini-tts-3-0');
+    return Response.json({audio_data:'UklGRg=='});
+  };
+  const saved = await f.create('google:alice',{name:'Mistral',protocol:'openai',base_url:'https://api.mistral.ai/v1',model:'',api_key:'device-mistral-key'});
+  try {
+    assert.equal((await f.send('google:alice','/api/tts','POST',{text:'こんにちは',api_connection:mistral})).status,200);
+    for (const base_url of ['https://proxy.example.com','https://api.mistral.ai/v2','https://api.mistral.ai/v1/custom','https://mistral.api.openai.com/v1']) {
+      assert.equal((await f.send('google:alice','/api/tts','POST',{text:'こんにちは',api_connection:{...mistral,base_url}})).status,403);
+    }
+    const pinned = f.request('google:alice','/api/tts','POST',{text:'こんにちは'});
+    pinned.headers.set('X-VJBot-Profile',saved.id);
+    assert.equal((await worker.fetch(pinned,f.env)).status,200);
+    assert.equal(calls,2);
+    const models = f.request('google:alice','/api/tts','POST',{action:'models'});
+    models.headers.set('X-VJBot-Profile',saved.id);
+    const list = await (await worker.fetch(models,f.env)).json();
+    assert.deepEqual(list.models,['voxtral-mini-tts-3-0']);
+    assert.equal(calls,2);
+  } finally {globalThis.fetch=previous;}
+});
+
 test('managed admin chat and voice ignore personal profiles, recheck grants and fail closed without the server key', async () => {
   const f = await fixture(), previous = globalThis.fetch;
   f.env.OPENAI_API_KEY = 'platform-voice-key-only';

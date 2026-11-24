@@ -84,4 +84,6 @@ test('managed voice markup retains Listen and quota notice without a duplicate p
   assert.match(html,/id="speech-test"[^>]*aria-describedby="speech-test-hint"/);
   assert.match(html,/id="speech-test-hint"[^>]*>[^<]*hạn mức[^<]*phí/i);
   assert.match(html,/id="speech-personal-setup"/);
+  assert.match(html,/id="speech-key-provider"[^>]*>[\s\S]*?option value="mistral">Mistral<\/option>/);
+  assert.match(html,/href="https:\/\/console\.mistral\.ai\/api-keys"/);
 });

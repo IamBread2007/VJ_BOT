@@ -68,6 +68,42 @@ export async function speechResponse(body, apiKey) {
   }
 }
 
+// Official Mistral speech uses the resolved OpenAI-compatible profile pinned to the official base.
+export const MISTRAL_SPEECH_BASE = 'https://api.mistral.ai/v1';
+export const MISTRAL_SPEECH_MODEL = 'voxtral-mini-tts-3-0';
+// Preset Voxtral 3 voices are per-language: Huong reads Vietnamese (and mixed text), Haruto Japanese.
+const MISTRAL_VOICES = {vietnamese: {id: 'voice_3144', name: 'Huong'}, japanese: {id: 'voice_3133', name: 'Haruto'}};
+function mistralVoice(text) {
+  const japanese = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(text);
+  return japanese && !/\p{Script=Latin}/u.test(text) ? MISTRAL_VOICES.japanese : MISTRAL_VOICES.vietnamese;
+}
+function mistralFailure(status) {
+  if ([401, 403].includes(status)) return reply({detail:'Mistral từ chối khóa này hoặc quyền giọng nói của nó. Hãy kiểm tra khóa trong Mistral AI Studio.',code:'tts_key_rejected'},403);
+  if (status === 404) return reply({detail:'Tài khoản đã chọn không dùng được model hoặc giọng nói Mistral này.',code:'speech_model_missing'},409);
+  if (status === 429) return reply({detail:'Giọng nói Mistral chạm giới hạn tốc độ hoặc hạn mức (429). Hệ thống không dùng giọng khác.',code:'tts_quota'},429);
+  return reply({detail:'Giọng nói Mistral không dùng được lúc này. Hãy thử lại.',code:'tts_unavailable'},503);
+}
+export async function mistralSpeechResponse(body, provider) {
+  const voice = {id: MISTRAL_VOICES.vietnamese.id, name: MISTRAL_VOICES.vietnamese.name};
+  if (body.action === 'models') return reply({models:[MISTRAL_SPEECH_MODEL],default_model:MISTRAL_SPEECH_MODEL,voice:voice.name,verified:false});
+  if (body.action !== undefined) return reply({detail:'Thao tác giọng nói không hợp lệ.'},400);
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  if (!text || text.length > 4000) return reply({detail:'Văn bản đọc của Mistral phải dài từ 1 đến 4000 ký tự.'},400);
+  if (body.speech_model !== undefined && body.speech_model !== MISTRAL_SPEECH_MODEL) return reply({detail:'Hãy chọn model Mistral TTS chính thức trong cài đặt Âm thanh.',code:'invalid_speech_model'},400);
+  const selected = mistralVoice(text);
+  try {
+    const response = await fetch(MISTRAL_SPEECH_BASE + '/audio/speech', {
+      method:'POST',redirect:'manual',signal:AbortSignal.timeout(30000),
+      headers:{'Content-Type':'application/json',Authorization:`Bearer ${provider.apiKey}`},
+      body:JSON.stringify({model:MISTRAL_SPEECH_MODEL,voice_id:selected.id,input:text,response_format:'mp3'})
+    });
+    if (!response.ok) { await response.body?.cancel(); return mistralFailure(response.status); }
+    const data = await response.json();
+    if (typeof data?.audio_data !== 'string' || !data.audio_data) return reply({detail:'Không nhận được âm thanh giọng nói.',code:'tts_unavailable'},503);
+    return reply({mimeType:'audio/mpeg',audioBase64:data.audio_data,voice:selected.name,model:MISTRAL_SPEECH_MODEL});
+  } catch { return reply({detail:'Giọng nói Mistral không dùng được lúc này. Hãy thử lại.',code:'tts_unavailable'},503); }
+}
+
 // Official OpenAI speech uses the resolved profile; custom endpoints never receive speech credentials.
 export async function openAISpeechResponse(body, provider) {
   if (body.action === 'models') return reply({models:['gpt-4o-mini-tts'],default_model:'gpt-4o-mini-tts',voice:'alloy',verified:false});

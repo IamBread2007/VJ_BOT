@@ -5,6 +5,7 @@ import {seal, unseal} from './ai-secrets.js';
 import {antigravityProvider, ANTIGRAVITY_PROFILE, connectionIdOk} from './antigravity-gateway.js';
 import {rateLimited} from './ai-usage.js';
 import {ADMIN_MODELS, LIVE_VOICES, adminAISettings, saveAdminAISettings} from './admin-ai.js';
+import {MISTRAL_SPEECH_BASE} from './speech.js';
 
 const json = (data, status = 200) => Response.json(data, {status, headers: {'Cache-Control': 'no-store'}});
 const text = new TextEncoder();
@@ -91,7 +92,7 @@ export async function resolveSpeechProvider(env, userId, override, profileId) {
   const admin = await isAdmin(env, userId);
   const noSpeech = () => ({response:json({detail:admin
     ? 'Máy chủ chưa cấu hình giọng nói OpenAI. Hệ thống không dùng kết nối riêng.'
-    : 'Hãy chọn kết nối giọng nói Google Gemini gốc hoặc OpenAI chính thức trong cài đặt Âm thanh. Hệ thống không dùng kết nối khác.',code:'no_tts'},403)});
+    : 'Hãy chọn kết nối giọng nói Google Gemini gốc, OpenAI chính thức hoặc Mistral chính thức trong cài đặt Âm thanh. Hệ thống không dùng kết nối khác.',code:'no_tts'},403)});
   if (profileId === 'platform_openai' && override !== undefined) return {response:providerFailure({error:'invalid_connection'})};
   if (admin) {
     if (override !== undefined || (profileId !== undefined && profileId !== 'platform_openai')) {
@@ -106,7 +107,7 @@ export async function resolveSpeechProvider(env, userId, override, profileId) {
   const response = providerFailure(provider);
   if (response) return {response};
   if (!((provider.protocol === 'gemini' && provider.baseUrl === DEFAULT_BASES.gemini)
-    || (provider.protocol === 'openai' && provider.baseUrl === DEFAULT_BASES.openai))) return noSpeech();
+    || (provider.protocol === 'openai' && [DEFAULT_BASES.openai, MISTRAL_SPEECH_BASE].includes(provider.baseUrl)))) return noSpeech();
   return {provider};
 }
 

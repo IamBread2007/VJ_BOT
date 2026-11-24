@@ -80,7 +80,7 @@ Thầy Lâm stays in the sidebar with idle animation and contextual quick questi
 - Favicon SVG/ICO và biểu tượng cảm ứng dùng cùng chân dung với sidebar. Lần tải dashboard không tự quét model hay danh mục giọng nói.
 - Settings: learners see saved API/OAuth connections and an independent voice account. Administrators see managed OpenAI model/reasoning/live-voice preferences and read-aloud, without personal-key forms. Opening settings never scans models or generates content automatically.
 
-Quick chat keeps scoped conversation history, prevents duplicate submissions and reuses request IDs only for explicit retries. Recordings and browser recognition keep manual entry available; Kaiwa grades only the submitted transcript. Learner read-aloud uses the independent native Gemini/official OpenAI selection; administrator read-aloud uses managed OpenAI. Stop cancels owned loading/playback, without silently switching accounts or using browser speech as a fallback.
+Quick chat keeps scoped conversation history, prevents duplicate submissions and reuses request IDs only for explicit retries. Recordings and browser recognition keep manual entry available; Kaiwa grades only the submitted transcript. Learner read-aloud uses the independent native Gemini/official OpenAI/official Mistral selection; administrator read-aloud uses managed OpenAI. Stop cancels owned loading/playback, without silently switching accounts or using browser speech as a fallback.
 
 ## Nguồn và giấy phép
 
