@@ -317,6 +317,21 @@ test('voice references persist per owner independently of chat and inject only a
   await assert.rejects(b.api.prepareRequest('/api/chat', {method:'POST',body:'{}'}, owner), {code: 'invalid', message: /.+/});
 });
 
+test('voice injection accepts a saved Mistral profile but still rejects every other custom base', async () => {
+  const b = browser(), options = {method: 'POST', body: '{"text":"こんにちは"}'};
+  for (const base_url of ['https://api.mistral.ai/v1', 'https://api.mistral.ai/v1/custom', 'https://proxy.example.com/v1']) {
+    const voice = await b.api.save(owner, {...draft(), protocol: 'openai', base_url, model: '', api_key: 'synthetic-mistral-key'});
+    b.api.setVoice(owner, {scope: 'local', id: voice.id});
+    if (base_url === 'https://api.mistral.ai/v1') {
+      const speech = JSON.parse((await b.api.prepareRequest('/api/tts', options, owner)).body).api_connection;
+      assert.equal(speech.base_url, base_url);
+      assert.equal(speech.api_key, 'synthetic-mistral-key');
+    } else {
+      await assert.rejects(b.api.prepareRequest('/api/tts', options, owner), /Gemini|OpenAI|Mistral/);
+    }
+  }
+});
+
 test('recorded transcription keeps the active OpenAI key while read-aloud uses its independent Gemini key', async () => {
   const b = browser(), options = {method:'POST',body:'{}'};
   const chat = await b.api.save(owner, {...draft(),base_url:'https://api.openai.com/v1',api_key:'synthetic-openai-transcription-key'});

@@ -132,8 +132,10 @@
     if (!['local', 'server'].includes(scope)) throw new Error('Chọn nơi lưu hợp lệ.');
     if (scope === 'server' && !storageEnabled) throw new Error('Máy chủ chưa lưu được khóa. Hãy chọn lưu trên thiết bị này.');
     const protocol = input.protocol || 'gemini';
-    if (!['gemini', 'openai'].includes(protocol)) throw new Error('Chọn Gemini gốc hoặc OpenAI chính thức.');
-    const draft = {name:input.name, api_key:input.api_key, protocol, base_url:BASES[protocol], model:''};
+    if (!['gemini', 'openai', 'mistral'].includes(protocol)) throw new Error('Chọn Gemini gốc, OpenAI chính thức hoặc Mistral chính thức.');
+    // Mistral speech is pinned to the official OpenAI-compatible base; the label stays 'mistral' only in the UI.
+    const connection = protocol === 'mistral' ? {protocol:'openai', base_url:'https://api.mistral.ai/v1'} : {protocol, base_url:BASES[protocol]};
+    const draft = {name:input.name, api_key:input.api_key, ...connection, model:''};
     const profile = scope === 'local' ? await VJProfiles.save(owner, draft)
       : (await send('/api/ai/profiles', 'POST', draft)).profile;
     if (signedInUser?.user_id !== owner || managed()) throw new Error('Tài khoản hoặc quyền đăng nhập đã thay đổi.');

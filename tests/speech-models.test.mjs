@@ -257,6 +257,25 @@ test('Gemini and owned OpenAI choices keep provider-specific models without cata
   assert.equal(calls,1);
 });
 
+test('saved Mistral rows appear once, default to the official Voxtral model and label both preset voices', async () => {
+  let calls=0;
+  const f=fixture(async(_url,options)=>{calls++;return Response.json({models:['voxtral-mini-tts-3-0'],voice:'Huong'});});
+  const mistral='https://api.mistral.ai/v1';
+  const rows=[...f.rows,profileRow('mistral','server',{protocol:'openai',base_url:mistral,model:''}),profileRow('mistral-proxy','server',{protocol:'openai',base_url:mistral+'/edge',model:''})];
+  const accounts=f.nodes.get('speech-profile'),select=f.nodes.get('speech-model'),flatten=rows=>rows.flatMap(row=>[row,...flatten(row.children||[])]);
+  f.window.renderVoiceProfiles('alice',rows,true,{configured:true,model:'chat-model-not-tts'});
+  assert.ok(flatten(accounts.children).some(row=>row.value==='server:mistral'));
+  assert.ok(!flatten(accounts.children).some(row=>row.value==='server:mistral-proxy'));
+  accounts.value='server:mistral';accounts.events.change();
+  assert.equal(f.window.selectedSpeechModel(),'voxtral-mini-tts-3-0');
+  assert.equal(f.nodes.get('speech-model-label').textContent,'Model giọng nói · Huong · Haruto');
+  await f.window.refreshSpeechModels();
+  assert.deepEqual(select.children.map(option=>option.value),['voxtral-mini-tts-3-0']);
+  assert.equal(calls,1);
+  select.value='gpt-4o-mini-tts';select.events.change();
+  assert.equal(f.window.selectedSpeechModel(),'voxtral-mini-tts-3-0');
+});
+
 test('regular users never gain a platform choice from stale metadata or saved preferences', () => {
   const f=fixture(async()=>{throw new Error('No automatic fetch');});
   const accounts=f.nodes.get('speech-profile');

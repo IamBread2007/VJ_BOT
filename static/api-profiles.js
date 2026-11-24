@@ -308,7 +308,7 @@
     if (speech && revision !== voiceVersion) throw unavailable();
     if (current?.scope !== 'local' || current.id !== selected.id) throw unavailable();
     if (speech && !((profile.protocol === 'gemini' && profile.base_url === BASES.gemini)
-      || (profile.protocol === 'openai' && profile.base_url === BASES.openai))) throw problem('Giọng nói cần Gemini gốc hoặc OpenAI chính thức.');
+      || (profile.protocol === 'openai' && [BASES.openai, 'https://api.mistral.ai/v1'].includes(profile.base_url)))) throw problem('Giọng nói cần Gemini gốc, OpenAI chính thức hoặc Mistral chính thức.');
     if (!speech && !profile.model) throw problem('Hãy chọn và kiểm tra một model trong cài đặt API trước khi dùng kết nối này.');
     const headers = new Headers(options.headers);
     headers.delete('X-VJBot-Profile');

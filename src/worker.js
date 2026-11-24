@@ -5,7 +5,7 @@ import { aiRoute, askAI, resolveSpeechProvider, resolveProvider } from './provid
 import {rateLimited} from './ai-usage.js';
 import { conversationScope, teacherCatalog, validLessonReference } from './tutor-context.js';
 import { kaiwaSchema, KAIWA_SYSTEM, parseKaiwaEvaluation } from './kaiwa.js';
-import {speechResponse, openAISpeechResponse} from './speech.js';
+import {speechResponse, openAISpeechResponse, mistralSpeechResponse, MISTRAL_SPEECH_BASE} from './speech.js';
 import {antigravityOAuthRoute} from './antigravity-oauth.js';
 import { tutorChat } from './tutor-chat.js';
 import { clearTutorConversation } from './tutor-session.js';
@@ -442,7 +442,7 @@ export default {
         const speech = await resolveSpeechProvider(env, url.searchParams.get("user_id"), body.api_connection, request.headers.get('X-VJBot-Profile') ?? undefined);
         if (speech.response) return speech.response;
         return speech.provider.protocol === 'openai'
-          ? await openAISpeechResponse(body, speech.provider)
+          ? await (speech.provider.baseUrl === MISTRAL_SPEECH_BASE ? mistralSpeechResponse : openAISpeechResponse)(body, speech.provider)
           : await speechResponse(body, speech.provider.apiKey);
       }
 

@@ -12,15 +12,20 @@
   const keyToggle = document.getElementById('speech-key-toggle'), formStatus = document.getElementById('speech-key-status');
   const test = document.getElementById('speech-test');
   let formOwner = null, formRevision = 0, saving = false;
-  const defaults = {gemini:'gemini-3.8-flash-tts', openai:'gpt-4o-mini-tts'};
+  const defaults = {gemini:'gemini-3.8-flash-tts', openai:'gpt-4o-mini-tts', mistral:'voxtral-mini-tts-3-0'};
+  const names = {gemini:'Gemini', openai:'OpenAI', mistral:'Mistral'};
+  const voices = {gemini:'Charon', openai:'alloy', mistral:'Huong · Haruto'};
   const preference = key => 'vjbot_speech_model:' + key;
   const owner = () => typeof signedInUser === 'undefined' ? null : signedInUser?.user_id;
   const managed = () => typeof signedInUser !== 'undefined' && signedInUser?.is_admin === true;
   const compatible = (model, protocol = provider()) => typeof model === 'string' && model.length <= 100
-    && (protocol === 'openai' ? model === defaults.openai
-      : protocol === 'gemini' && /^gemini-3\.8-flash(?:-lite)?-tts(?:-[a-z0-9-]+)?$/.test(model));
+    && (protocol === 'gemini' ? /^gemini-3\.8-flash(?:-lite)?-tts(?:-[a-z0-9-]+)?$/.test(model)
+      : model === defaults[protocol]);
+  const MISTRAL_BASE = 'https://api.mistral.ai/v1';
+  const rowProvider = row => row?.protocol === 'openai' && row.base_url === MISTRAL_BASE ? 'mistral' : row?.protocol;
   const native = row => (row.protocol === 'gemini' && row.base_url === 'https://generativelanguage.googleapis.com')
-    || (row.protocol === 'openai' && row.base_url === 'https://api.openai.com/v1');
+    || (row.protocol === 'openai' && [BASE_OPENAI, MISTRAL_BASE].includes(row.base_url));
+  const BASE_OPENAI = 'https://api.openai.com/v1';
   const reference = row => row && row.scope !== 'none' ? `${row.scope}:${row.id}` : '';
   let pending = null, version = 0, metadataOwner = null, metadataAdmin = false, profiles = [], platform = null;
   let catalogIdentity = '', catalogModels = [];
@@ -32,7 +37,7 @@
     if (managed()) return 'openai';
     try {
       const selected = window.VJProfiles?.voice(owner());
-      return voiceRows().find(row => reference(row) === reference(selected))?.protocol || '';
+      return rowProvider(voiceRows().find(row => reference(row) === reference(selected))) || '';
     } catch { return ''; }
   }
   function identity() {
@@ -151,8 +156,8 @@
     accounts.disabled = !user;
     select.disabled = test.disabled = !key || !selectedRow;
     refresh.disabled = select.disabled || Boolean(pending);
-    hint.textContent = 'Giọng nói dùng tài khoản Gemini gốc hoặc OpenAI chính thức đã lưu riêng, độc lập với trò chuyện.';
-    modelLabel.textContent = selectedRow ? `Model giọng nói · ${selectedRow.protocol === 'openai' ? 'alloy' : 'Charon'}` : 'Model giọng nói';
+    hint.textContent = 'Giọng nói dùng tài khoản Gemini gốc, OpenAI chính thức hoặc Mistral chính thức đã lưu riêng, độc lập với trò chuyện.';
+    modelLabel.textContent = selectedRow ? `Model giọng nói · ${voices[rowProvider(selectedRow)] || ''}` : 'Model giọng nói';
     status.textContent = invalid ? 'Không lưu được hoặc dữ liệu lựa chọn giọng nói bị lỗi. Hãy bật lại bộ nhớ hoặc chọn lại tài khoản giọng nói.' : key && !selectedRow
       ? 'Tài khoản giọng nói đã chọn không dùng được hoặc không được hỗ trợ. Hệ thống không tự thay thế.'
       : selectedRow ? '' : 'Em chọn kết nối giọng nói hoặc thêm khóa mới nhé.';
@@ -168,7 +173,7 @@
     pending = controller;
     const current = () => !controller.signal.aborted && request === version && key === identity();
     draw(catalogIdentity === key ? catalogModels : [], choice(key));
-    status.textContent = `Đang tải danh sách model giọng nói ${provider() === 'openai' ? 'OpenAI' : 'Gemini'}… Không tạo âm thanh.`;
+    status.textContent = `Đang tải danh sách model giọng nói ${names[provider()] || ''}… Không tạo âm thanh.`;
     refresh.disabled = true;
     try {
       const response = await apiFetch('/api/tts', {method:'POST', signal:controller.signal,
