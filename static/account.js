@@ -82,7 +82,7 @@ function renderAccount(){
   document.getElementById('tab-btn-admin').hidden=!signedInUser?.is_admin;
   for(const [id,value] of [['sidebar-account-name',signedInUser?.name || 'Đăng nhập'],['sidebar-account-role',signedInUser?.is_admin?'Quản trị viên':'Học viên'],['sidebar-account-initial',(signedInUser?.name || '?').charAt(0).toUpperCase()]]){const node=document.getElementById(id);if(node)node.textContent=value;}
   const adminNav=document.getElementById('settings-admin-nav');
-  const voice=document.getElementById('btn-voice-input');if(voice)voice.hidden=!signedInUser?.is_admin;
+  const voice=document.getElementById('btn-voice-input');if(voice)voice.hidden=!signedInUser;
   if(adminNav)adminNav.hidden=!signedInUser?.is_admin;
   globalThis.checkLiveAccount?.();
 }

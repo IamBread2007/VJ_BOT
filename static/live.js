@@ -233,10 +233,10 @@
   window.addEventListener('hashchange',()=>{if(!location.hash.startsWith('#classroom')){end();timeline.stop();}});
   window.checkLiveAccount=()=>{
     timeline.accountChanged();
-    if(!signedInUser?.is_admin || callOwner && callOwner!==signedInUser?.user_id)mode(false);
+    if(!signedInUser || callOwner && callOwner!==signedInUser?.user_id)mode(false);
   };
   window.addEventListener('vjbot-account-ready',window.checkLiveAccount);
   window.stopLiveConversation=()=>{end();timeline.stop();timeline.accountChanged();};
-  window.openLiveConversation=()=>{if(!signedInUser?.is_admin)return;mode(true);};
+  window.openLiveConversation=()=>{if(!signedInUser)return;mode(true);};
   paint(new Float32Array(BARS),0);
 })();
