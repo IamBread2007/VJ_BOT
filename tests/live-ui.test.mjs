@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 
-function liveUI({microphone,reply}={}) {
+function liveUI({microphone,reply,settings,geminiReply}={}) {
   const elements=new Map(),windowEvents={},tracks=[{enabled:true,stopped:false,stop(){this.stopped=true;}}],requests=[];
   const stream={getTracks:()=>tracks,getAudioTracks:()=>tracks};
   const element=id=>{
@@ -16,7 +16,24 @@ function liveUI({microphone,reply}={}) {
     return elements.get(id);
   };
   const channel={readyState:'open',events:{},sent:[],closed:false,addEventListener(name,fn){this.events[name]=fn;},send(value){this.sent.push(JSON.parse(value));},close(){this.closed=true;},emit(event){this.events.message({data:JSON.stringify(event)});}};
-  let peer,permissions=0;
+  let peer,permissions=0,socket;
+  class FakeSocket {
+    constructor(url){socket=this;this.url=url;this.events={};this.sent=[];this.readyState=1;}
+    addEventListener(name,fn){this.events[name]=fn;}
+    send(value){this.sent.push(JSON.parse(value));}
+    close(){this.closed=true;}
+    emit(name,data){this.events[name]?.({data:typeof data==='string'?data:JSON.stringify(data)});}
+  }
+  class FakeAudioContext {
+    constructor(){this.sampleRate=48000;this.currentTime=0;this.destination={};}
+    resume(){return Promise.resolve();}close(){this.closed=true;return Promise.resolve();}
+    createAnalyser(){return {fftSize:256,smoothingTimeConstant:0,getByteTimeDomainData(){},connect(){}};}
+    createMediaStreamSource(){return {connect(){},disconnect(){}};}
+    createGain(){return {gain:{value:1},connect(){},disconnect(){}};}
+    createScriptProcessor(){return {onaudioprocess:null,connect(){},disconnect(){}};}
+    createBuffer(channels,length,rate){return {duration:length/rate,getChannelData(){return new Float32Array(length);}};}
+    createBufferSource(){return {buffer:null,connect(){},start(){},disconnect(){}};}
+  }
   class Peer {
     constructor(){peer=this;this.events={};this.iceGatheringState='complete';this.connectionState='connected';}
     addTrack(){}addEventListener(name,fn){this.events[name]=fn;}removeEventListener(){}
@@ -28,11 +45,17 @@ function liveUI({microphone,reply}={}) {
   }
   const context=vm.createContext({console,Date,JSON,setInterval,clearInterval,setTimeout,clearTimeout,AbortController,
     RTCPeerConnection:Peer,MediaStream:class{},signedInUser:{user_id:'email:admin',is_admin:true},activeCurriculumLevel:'N5',
+    WebSocket:FakeSocket,AudioContext:FakeAudioContext,atob,btoa,URL,encodeURIComponent,Float32Array,Int16Array,
     location:{hash:'#classroom'},navigator:{mediaDevices:{getUserMedia:()=>{permissions++;return microphone?microphone():Promise.resolve(stream);}}},
-    apiFetch:async(path,options)=>{requests.push({path,body:JSON.parse(options.body),signal:options.signal});return reply?reply():Response.json({model:'gpt-live-1',voice:'shida',id:'live_test',sdp:'answer',greeting:'こんにちは'});},
+    apiFetch:async(path,options)=>{
+      if(path==='/api/ai/settings')return Response.json(settings??{is_admin:true,source:'platform'});
+      requests.push({path,body:JSON.parse(options.body),signal:options.signal});
+      if(path==='/api/live/gemini')return geminiReply?geminiReply():Response.json({token:'auth_tokens/test-token',ws:'wss://test/ws',model:'gemini-live',greeting:'こんにちは',commands:{repeat:'lặp lại'}},{status:201});
+      return reply?reply():Response.json({model:'gpt-live-1',voice:'shida',id:'live_test',sdp:'answer',greeting:'こんにちは'});
+    },
     document:{getElementById:element,createElement:()=>element('node_'+elements.size),querySelector:element,querySelectorAll:()=>[]},addEventListener:(name,fn)=>{windowEvents[name]=fn;}});
   context.window=context;vm.runInContext(readFileSync('static/live-transcript.js','utf8'),context);vm.runInContext(readFileSync('static/live.js','utf8'),context);
-  return {context,element,channel,tracks,requests,stream,peer:()=>peer,permissions:()=>permissions,windowEvents};
+  return {context,element,channel,tracks,requests,stream,peer:()=>peer,socket:()=>socket,permissions:()=>permissions,windowEvents};
 }
 const captions=(ui,role)=>ui.element('live-transcript').children.filter(row=>row.className==='live-turn '+role).map(row=>row.children[1].textContent).join('');
 
@@ -52,6 +75,37 @@ test('live voice relays only SDP and lesson references, appends exact timed capt
     ui.element('live-end').events.click();assert.equal(ui.channel.sent.at(-1).type,'session.close');assert.equal(ui.tracks[0].enabled,false);
     assert.notEqual(ui.peer().closed,true);
     ui.channel.emit({type:'session.closed'});assert.equal(ui.peer().closed,true);assert.equal(ui.tracks[0].stopped,true);assert.equal(ui.element('live-start').disabled,false);
+  } finally {ui.windowEvents.pagehide();}
+});
+
+test('learners with a Gemini connection open a websocket session with timed captions and commands',async()=>{
+  const ui=liveUI({settings:{is_admin:false,source:'own',own:{protocol:'gemini',base_url:'',model:'gm'},
+    bases:{gemini:'https://generativelanguage.googleapis.com'}}});
+  try {
+    await ui.element('live-start').events.click();
+    assert.equal(ui.requests.length,1);
+    assert.equal(ui.requests[0].path,'/api/live/gemini');assert.deepEqual(ui.requests[0].body,{level:'N5',lesson:null});
+    const socket=ui.socket();assert.equal(socket.url,'wss://test/ws?access_token=auth_tokens%2Ftest-token');
+    socket.emit('open');assert.equal(socket.sent[0].clientContent.turns[0].parts[0].text,'こんにちは');
+    socket.emit('message',{setupComplete:{}});
+    const audio=Buffer.from(new Int16Array([100,-100,200]).buffer).toString('base64');
+    socket.emit('message',{serverContent:{modelTurn:{parts:[{inlineData:{data:audio}}]},outputTranscription:{text:'こんにちは'}}});
+    socket.emit('message',{serverContent:{inputTranscription:{text:'はい'}}});
+    assert.equal(captions(ui,'assistant'),'こんにちは');assert.equal(captions(ui,'user'),'はい');
+    ui.element('live-commands').events.click({target:{dataset:{command:'repeat'}}});
+    assert.equal(socket.sent.at(-1).clientContent.turns[0].parts[0].text,'lặp lại');
+    ui.element('live-end').events.click();
+    assert.equal(socket.closed,true);assert.equal(ui.tracks[0].stopped,true);assert.equal(ui.element('live-start').disabled,false);
+    assert.equal(ui.peer(),undefined);
+  } finally {ui.windowEvents.pagehide();}
+});
+
+test('a learner without a live-capable key gets a guidance message instead of a call',async()=>{
+  const ui=liveUI({settings:{is_admin:false,source:'own',own:{protocol:'openai',base_url:'https://openrouter.ai/api/v1',model:'m'}}});
+  try {
+    await ui.element('live-start').events.click();
+    assert.equal(ui.requests.length,0);assert.equal(ui.socket(),undefined);assert.equal(ui.peer(),undefined);
+    assert.equal(ui.element('live-status').textContent,'Nói trực tiếp cần kết nối OpenAI chính thức hoặc Gemini gốc trong Cài đặt.');
   } finally {ui.windowEvents.pagehide();}
 });
 

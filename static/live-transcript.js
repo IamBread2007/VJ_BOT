@@ -44,7 +44,7 @@
     }
     async function translate(){
       const run=generation,account=owner;
-      if(account!==signedInUser?.user_id || !signedInUser?.is_admin)return;
+      if(account!==signedInUser?.user_id || !signedInUser)return;
       let size=0;
       const pending=segments.filter(s=>{if(!s.text.trim() || s.failed || s.translatedText===s.text || size+s.text.length>6000)return false;size+=s.text.length;return true;}).slice(0,8);
       if(!pending.length)return;
@@ -90,7 +90,7 @@
       },
       finish(){if(accepting){accepting=false;schedule();}},
       stop,
-      accountChanged(){if(owner!==signedInUser?.user_id || !signedInUser?.is_admin){stop();owner=null;segments=[];host.replaceChildren();host.dataset.empty='true';}}
+      accountChanged(){if(owner!==signedInUser?.user_id || !signedInUser){stop();owner=null;segments=[];host.replaceChildren();host.dataset.empty='true';}}
     };
   };
 })();

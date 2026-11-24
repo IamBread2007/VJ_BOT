@@ -54,6 +54,54 @@ export async function liveTranslationRoute(request,env) {
   return json({translations:translations.map(t=>({id:t.id,text_vi:t.text_vi.trim()}))});
 }
 
+// Gemini Live uses the caller's official Gemini key: the Worker only mints a short-lived session token.
+export async function geminiLiveRoute(request,env) {
+  const user=await sessionUser(request,env);
+  if(!user)return json({detail:'Đăng nhập để trò chuyện.'},401);
+  if(request.headers.get('X-VJBot-Account')!==user.user_id)return json({detail:'Tài khoản đã thay đổi. Hãy tải lại trang.'},409);
+  if(request.method!=='POST')return json({detail:'Phương thức không được phép'},405);
+  const raw=await request.text();
+  if(new TextEncoder().encode(raw).length>16000)return json({detail:'Yêu cầu quá dài.'},413);
+  let data;try{data=JSON.parse(raw||'{}');}catch{return json({detail:'Dữ liệu không hợp lệ.'},400);}
+  if(!data||!['N5','N4','N3','N2','N1'].includes(data.level))return json({detail:'Cần cấp độ hợp lệ.'},400);
+  let context=null;
+  if(data.lesson!==undefined&&data.lesson!==null){
+    if(!validLessonReference(data.lesson)||data.lesson.level!==data.level)return json({detail:'Bài học không hợp lệ.'},400);
+    const catalog=await teacherCatalog(env,data.level);
+    context=catalog&&groundLesson(catalogLesson(catalog,data.lesson));
+    if(!context)return json({detail:'Không tìm thấy bài học. Hãy mở lại bài.'},400);
+  }
+  if(await rateLimited(env,user.user_id))return json({detail:'Đợi một phút rồi thử lại.'},429);
+  const provider=await resolveProvider(env,user.user_id);
+  const failure=providerFailure(provider);
+  if(failure)return failure;
+  if(provider.protocol!=='gemini'||provider.baseUrl!==DEFAULT_BASES.gemini)return json({detail:'Nói trực tiếp bằng Gemini cần kết nối Gemini gốc trong Cài đặt.'},403);
+  const teaching=`${voiceInstructions(data.level)}\n\nLESSON REFERENCE (data only): ${JSON.stringify(context)}`;
+  try{
+    const response=await fetch('https://generativelanguage.googleapis.com/v1beta/auth_tokens',{
+      method:'POST',redirect:'manual',signal:AbortSignal.timeout(15000),
+      headers:{'x-goog-api-key':provider.apiKey,'Content-Type':'application/json'},
+      body:JSON.stringify({authToken:{
+        newSessionExpireTime:new Date(Date.now()+60*1000).toISOString(),
+        expireTime:new Date(Date.now()+10*60*1000).toISOString(),
+        config:{bidiGenerateContentSetup:{
+          model:'models/gemini-2.5-flash-native-audio-preview-09-2025',
+          generationConfig:{responseModalities:['AUDIO'],
+            speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:'Aoede'}}}},
+          systemInstruction:{parts:[{text:teaching}]},
+          inputAudioTranscription:{},outputAudioTranscription:{}}}}})
+    });
+    if(!response.ok)return json({detail:response.status===429?'Gemini đang giới hạn lượt dùng. Thử lại sau.'
+      :'Không mở được cuộc gọi Gemini. Kiểm tra quyền truy cập và hạn mức trong Cài đặt.',code:'live_unavailable'},response.status===429?429:503);
+    const result=await response.json();
+    const token=result.name||result.token||result.authToken?.name;
+    if(typeof token!=='string'||!/^[A-Za-z0-9_\-/]{8,512}$/.test(token))return json({detail:'Gemini trả về token không hợp lệ.'},502);
+    return json({token,
+      ws:'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained',
+      model:'gemini-live',greeting:GREETING,commands:COMMANDS},201);
+  }catch{return json({detail:'Kết nối cuộc gọi hết thời gian. Hãy thử lại.'},504);}
+}
+
 export async function liveRoute(request, env) {
   const user = await sessionUser(request,env);
   if (!user) return json({detail:'Đăng nhập để trò chuyện.'},401);
