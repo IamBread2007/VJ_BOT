@@ -1,5 +1,4 @@
 import {sessionUser, hashToken} from './auth.js';
-import {isAdmin} from './admin.js';
 import {adminAISettings} from './admin-ai.js';
 import {rateLimited} from './ai-usage.js';
 import {teacherCatalog, validLessonReference, catalogLesson, groundLesson} from './tutor-context.js';
@@ -13,7 +12,6 @@ const {start: GREETING, ...COMMANDS} = VOICE_COMMANDS;
 export async function liveTranslationRoute(request,env) {
   const user=await sessionUser(request,env);
   if(!user)return json({detail:'Đăng nhập để dịch hội thoại.'},401);
-  if(!await isAdmin(env,user.user_id))return json({detail:'Dịch hội thoại trực tiếp dành cho quản trị viên.'},403);
   if(request.headers.get('X-VJBot-Account')!==user.user_id)return json({detail:'Tài khoản đã thay đổi. Hãy tải lại.'},409);
   if(request.method!=='POST')return json({detail:'Phương thức không được phép'},405);
   if(!env.OPENAI_API_KEY)return json({detail:'Chưa cấu hình OpenAI trên máy chủ.'},503);
@@ -46,7 +44,6 @@ export async function liveTranslationRoute(request,env) {
 export async function liveRoute(request, env) {
   const user = await sessionUser(request,env);
   if (!user) return json({detail:'Đăng nhập để trò chuyện.'},401);
-  if (!await isAdmin(env,user.user_id)) return json({detail:'Hội thoại trực tiếp dành cho quản trị viên.'},403);
   if (request.headers.get('X-VJBot-Account') !== user.user_id) return json({detail:'Tài khoản đã thay đổi. Hãy tải lại trang.'},409);
   if (request.method !== 'POST') return json({detail:'Phương thức không được phép'},405);
   if (!env.OPENAI_API_KEY) return json({detail:'Chưa cấu hình OpenAI trên máy chủ.'},503);

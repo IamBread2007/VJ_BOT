@@ -929,14 +929,12 @@ test('admin model and reasoning settings persist per account and do not affect p
   } finally {globalThis.fetch=original;}
 });
 
-test('GPT-Live only exchanges SDP for admins and keeps configuration and keys on the server',async()=>{
+test('GPT-Live exchanges SDP for signed-in accounts and keeps configuration and keys on the server',async()=>{
   const {env,request}=await authenticated(),original=globalThis.fetch;
   env.OPENAI_API_KEY='sk-server-live';
   const payload={level:'N5',sdp:'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n'};
   const make=data=>{const r=request('/api/live',data);r.headers.set('X-VJBot-Account','google:qa');return r;};
   assert.equal((await worker.fetch(new Request('https://vjbot.test/api/live',{method:'POST',body:'{}'}),env)).status,401);
-  assert.equal((await worker.fetch(make(payload),env)).status,403);
-  await asAdmin(env);
   assert.equal((await worker.fetch(request('/api/live',payload),env)).status,409);
   for(const patch of [{level:'N9'},{sdp:'hello'},{sdp:payload.sdp+'m=video 9 foo\n'},{lesson:{id:'missing',level:'N5'}}]){
     assert.equal((await worker.fetch(make({...payload,...patch}),env)).status,400);
@@ -961,7 +959,7 @@ test('GPT-Live only exchanges SDP for admins and keeps configuration and keys on
     globalThis.fetch=async()=>new Response('error '+env.OPENAI_API_KEY,{status:403});
     const denied=await worker.fetch(make(payload),env);assert.equal(denied.status,503);
     assert.ok(!(await denied.text()).includes(env.OPENAI_API_KEY));
-    env.ADMIN_EMAILS='';assert.equal((await worker.fetch(make(payload),env)).status,403);
+    env.ADMIN_EMAILS='';assert.equal((await worker.fetch(make(payload),env)).status,503);
   } finally {globalThis.fetch=original;}
 });
 
@@ -1107,14 +1105,14 @@ test('learner transcription requires an explicit owned official OpenAI chat conn
   }finally{globalThis.fetch=original;}
 });
 
-test('live translation requires an admin, matching account and bounded caption data before fetching',async()=>{
+test('live translation requires a matching account and bounded caption data before fetching',async()=>{
   const {env,request}=await authenticated(),original=globalThis.fetch;env.OPENAI_API_KEY='server-translation-key';
   const segments=[{id:'caption_1',role:'user',text:'私は学生です。'}];
   const make=body=>{const r=new Request('https://vjbot.test/api/live/translate',{method:'POST',headers:request('/api/live/translate').headers,body:JSON.stringify(body)});r.headers.set('X-VJBot-Account','google:qa');return r;};
   let calls=0;globalThis.fetch=async()=>{calls++;throw new Error('must not fetch');};
   try{
     assert.equal((await worker.fetch(new Request('https://vjbot.test/api/live/translate',{method:'POST',body:'{}'}),env)).status,401);
-    assert.equal((await worker.fetch(make({segments}),env)).status,403);await asAdmin(env);
+    assert.equal((await worker.fetch(make({segments}),env)).status,503);assert.equal(calls,1);calls=0;
     assert.equal((await worker.fetch(request('/api/live/translate',{segments}),env)).status,409);
     for(const data of [null,{},[],{segments:[]},{segments:Array(9).fill(segments[0])},{segments:[...segments,...segments]},
       {segments:[{...segments[0],role:'system'}]},{segments:[{...segments[0],id:'<script>'}]},{segments:[{...segments[0],text:'x'.repeat(1201)}]}]){

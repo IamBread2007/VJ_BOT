@@ -100,8 +100,9 @@ test('opening live shows the panel without requesting a microphone until explici
   }finally{ui.windowEvents.pagehide();}
 });
 
-test('free accounts cannot start a live conversation through the Voice action',async()=>{
-  const ui=liveUI();ui.context.signedInUser.is_admin=false;await ui.context.openLiveConversation();assert.equal(ui.requests.length,0);assert.equal(ui.peer(),undefined);
+test('signed-in learners open the live view without media or fetch until they press start',async()=>{
+  const ui=liveUI();ui.context.signedInUser.is_admin=false;await ui.context.openLiveConversation();
+  assert.equal(ui.element('classroom-voice').hidden,false);assert.equal(ui.requests.length,0);assert.equal(ui.peer(),undefined);
 });
 
 test('switching accounts during an active call disables the mic and clears the previous transcript',async()=>{
