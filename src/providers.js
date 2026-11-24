@@ -68,7 +68,7 @@ async function resolveConnection(env, userId, override, profileId, speech = fals
 
 export const NO_AI = 'Thêm khóa API và chọn mô hình trong Cài đặt để trò chuyện với thầy Lâm.';
 export const REKEY = 'Không giải mã được khóa API đã lưu. Hãy nhập lại trong Cài đặt.';
-const providerFailure = provider => !provider || provider.error === 'no_model'
+export const providerFailure = provider => !provider || provider.error === 'no_model'
   ? json({detail: NO_AI, code: 'no_ai'}, 403)
   : provider.error === 'rekey' ? json({detail: REKEY, code: 'rekey'}, 409)
   : provider.error === 'profile_changed' ? json({detail: 'Kết nối API đã chọn không còn nữa. Hãy chọn kết nối trong Cài đặt.', code: 'profile_changed'}, 409)

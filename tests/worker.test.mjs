@@ -929,20 +929,25 @@ test('admin model and reasoning settings persist per account and do not affect p
   } finally {globalThis.fetch=original;}
 });
 
-test('GPT-Live exchanges SDP for signed-in accounts and keeps configuration and keys on the server',async()=>{
+test('GPT-Live exchanges SDP for signed-in accounts and bills each caller\'s own OpenAI key',async()=>{
   const {env,request}=await authenticated(),original=globalThis.fetch;
   env.OPENAI_API_KEY='sk-server-live';
   const payload={level:'N5',sdp:'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n'};
   const make=data=>{const r=request('/api/live',data);r.headers.set('X-VJBot-Account','google:qa');return r;};
   assert.equal((await worker.fetch(new Request('https://vjbot.test/api/live',{method:'POST',body:'{}'}),env)).status,401);
   assert.equal((await worker.fetch(request('/api/live',payload),env)).status,409);
+  assert.equal((await worker.fetch(make(payload),env)).status,403);
+  await withApi(env,request,{base_url:'https://api.example.com/v1'});
+  assert.equal((await worker.fetch(make(payload),env)).status,403);
+  await withApi(env,request,{base_url:'https://api.openai.com/v1'});
   for(const patch of [{level:'N9'},{sdp:'hello'},{sdp:payload.sdp+'m=video 9 foo\n'},{lesson:{id:'missing',level:'N5'}}]){
     assert.equal((await worker.fetch(make({...payload,...patch}),env)).status,400);
   }
   assert.equal((await worker.fetch(make({...payload,sdp:'x'.repeat(66000)}),env)).status,413);
+  let expectedKey='sk-test-12345678';
   globalThis.fetch=async(url,options)=>{
     assert.equal(url,'https://api.openai.com/v1/live/sessions');
-    assert.equal(options.headers.Authorization,'Bearer '+env.OPENAI_API_KEY);assert.equal(options.redirect,'manual');
+    assert.equal(options.headers.Authorization,'Bearer '+expectedKey);assert.equal(options.redirect,'manual');
     const body=JSON.parse(options.body);
     assert.equal(body.session.model,'gpt-live-1');assert.equal(body.session.store,false);
     assert.equal(body.session.audio.output.voice,'shida');
@@ -956,10 +961,11 @@ test('GPT-Live exchanges SDP for signed-in accounts and keeps configuration and 
     assert.equal(response.status,201);const value=await response.json();
     assert.equal(value.id,'live_test');assert.equal(value.sdp,'v=0\r\nanswer');assert.equal(value.private_key,undefined);
     assert.ok(!JSON.stringify(value).includes(env.OPENAI_API_KEY));
+    await asAdmin(env);expectedKey=env.OPENAI_API_KEY;
+    assert.equal((await worker.fetch(make(payload),env)).status,201);
     globalThis.fetch=async()=>new Response('error '+env.OPENAI_API_KEY,{status:403});
     const denied=await worker.fetch(make(payload),env);assert.equal(denied.status,503);
     assert.ok(!(await denied.text()).includes(env.OPENAI_API_KEY));
-    env.ADMIN_EMAILS='';assert.equal((await worker.fetch(make(payload),env)).status,503);
   } finally {globalThis.fetch=original;}
 });
 
@@ -1107,6 +1113,7 @@ test('learner transcription requires an explicit owned official OpenAI chat conn
 
 test('live translation requires a matching account and bounded caption data before fetching',async()=>{
   const {env,request}=await authenticated(),original=globalThis.fetch;env.OPENAI_API_KEY='server-translation-key';
+  await withApi(env,request,{base_url:'https://api.openai.com/v1'});
   const segments=[{id:'caption_1',role:'user',text:'私は学生です。'}];
   const make=body=>{const r=new Request('https://vjbot.test/api/live/translate',{method:'POST',headers:request('/api/live/translate').headers,body:JSON.stringify(body)});r.headers.set('X-VJBot-Account','google:qa');return r;};
   let calls=0;globalThis.fetch=async()=>{calls++;throw new Error('must not fetch');};
