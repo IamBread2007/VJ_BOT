@@ -969,6 +969,39 @@ test('GPT-Live exchanges SDP for signed-in accounts and bills each caller\'s own
   } finally {globalThis.fetch=original;}
 });
 
+test('Gemini Live mints a constrained token billed to the caller\'s own Gemini key',async()=>{
+  const {env,request}=await authenticated(),original=globalThis.fetch;
+  const make=data=>{const r=request('/api/live/gemini',data);r.headers.set('X-VJBot-Account','google:qa');return r;};
+  assert.equal((await worker.fetch(new Request('https://vjbot.test/api/live/gemini',{method:'POST',body:'{}'}),env)).status,401);
+  assert.equal((await worker.fetch(request('/api/live/gemini',{level:'N5'}),env)).status,409);
+  assert.equal((await worker.fetch(make({level:'N5'}),env)).status,403);
+  await withApi(env,request);
+  assert.equal((await worker.fetch(make({level:'N5'}),env)).status,403);
+  await withApi(env,request,{protocol:'gemini',base_url:'',model:'gm',api_key:'AIza-12345678'});
+  for(const patch of [{level:'N9'},{lesson:{id:'missing',level:'N5'}}]){
+    assert.equal((await worker.fetch(make({level:'N5',...patch}),env)).status,400);
+  }
+  globalThis.fetch=async(url,options)=>{
+    assert.equal(url,'https://generativelanguage.googleapis.com/v1beta/auth_tokens');
+    assert.equal(options.headers['x-goog-api-key'],'AIza-12345678');
+    const setup=JSON.parse(options.body).authToken.config.bidiGenerateContentSetup;
+    assert.equal(setup.model,'models/gemini-2.5-flash-native-audio-preview-09-2025');
+    assert.deepEqual(setup.generationConfig.responseModalities,['AUDIO']);
+    assert.ok(setup.inputAudioTranscription&&setup.outputAudioTranscription);
+    return Response.json({name:'auth_tokens/gemini-test-token'});
+  };
+  try {
+    const response=await worker.fetch(make({level:'N5'}),env);assert.equal(response.status,201);
+    const value=await response.json();
+    assert.equal(value.token,'auth_tokens/gemini-test-token');
+    assert.ok(value.ws.includes('BidiGenerateContentConstrained'));assert.ok(value.greeting);assert.ok(value.commands);
+    assert.ok(!JSON.stringify(value).includes('AIza-12345678'));
+    globalThis.fetch=async()=>new Response('error AIza-12345678',{status:403});
+    const denied=await worker.fetch(make({level:'N5'}),env);assert.equal(denied.status,503);
+    assert.ok(!(await denied.text()).includes('AIza-12345678'));
+  } finally {globalThis.fetch=original;}
+});
+
 test('practice hints omit the authored key and feedback resolves the exact canonical selected option without changing progress',async()=>{
   const {env,request}=await authenticated(),original=globalThis.fetch;
   await withApi(env,request);

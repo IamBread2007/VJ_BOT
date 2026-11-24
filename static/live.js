@@ -1,10 +1,11 @@
-// GPT-Live carries microphone audio over WebRTC; the project key stays on the Worker.
+// GPT-Live carries microphone audio over WebRTC; Gemini Live carries it over a WebSocket. Keys stay on the Worker or as ephemeral tokens.
 (function () {
   const el = id => document.getElementById(id);
   let peer=null, stream=null, channel=null, abort=null, version=0, ready=false, closing=false;
   let timer=null, closeTimer=null, connectTimer=null, disconnectedTimer=null, startedAt=0;
   const BARS=33,SILENCE='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
   let audioContext=null,analyser=null,waveFrame=null,callOwner=null,statsTimer=null,remoteLevel=0;
+  let liveSocket=null,captureNode=null,captureSource=null,nextPlayTime=0,liveEngineCached=null;
   const audioSources=[];
   let wakeLock=null,commands={},teacherAnalyser=null,teacherHeardAt=0,teacherExpectedUntil=0,teacherSpeaking=false,userMuted=false;
   // Keep the screen on during a call: iPhone locking the screen drops the microphone.
@@ -53,8 +54,9 @@
     clearInterval(timer); clearTimeout(closeTimer); clearTimeout(connectTimer); clearTimeout(disconnectedTimer);
     abort?.abort(); abort=null;
     stream?.getTracks().forEach(track=>track.stop()); stream=null;
-    const oldChannel=channel, oldPeer=peer; channel=null;peer=null;
-    oldChannel?.close(); oldPeer?.close();
+    const oldChannel=channel, oldPeer=peer, oldSocket=liveSocket; channel=null;peer=null;liveSocket=null;
+    oldChannel?.close(); oldPeer?.close(); oldSocket?.close();
+    captureSource?.disconnect?.();captureNode?.disconnect?.();captureSource=null;captureNode=null;nextPlayTime=0;
     if(waveFrame!==null)cancelAnimationFrame(waveFrame);waveFrame=null;
     clearInterval(statsTimer);statsTimer=null;remoteLevel=0;
     audioSources.splice(0).forEach(source=>source.disconnect());
@@ -110,6 +112,7 @@
   function end(immediate=false) {
     stream?.getTracks().forEach(track=>{track.enabled=false;});
     if(closing && !immediate)return;
+    if (liveSocket) { liveSocket.close();liveSocket=null; }
     if (channel?.readyState==='open' && ready && !closing) {
       closing=true; channel.send(JSON.stringify({type:'session.close',event_id:'close_'+Date.now()}));
       if (!immediate) {
@@ -121,7 +124,7 @@
     cleanup('Đã kết thúc cuộc trò chuyện.');
   }
   async function start() {
-    if (peer || el('live-start').disabled) return;
+    if (peer || liveSocket || el('live-start').disabled) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection==='undefined') {status('Trình duyệt cần hỗ trợ WebRTC và micro qua HTTPS hoặc localhost.');return;}
     // iOS only lets an element play later if it was started inside this tap: unlock it with a silent clip.
     const speaker=el('live-audio');
@@ -135,7 +138,11 @@
       wave();
       const microphone=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true},video:false});
       if(run!==version || owner!==signedInUser?.user_id){microphone.getTracks().forEach(track=>track.stop());if(run===version)cleanup('Tài khoản đã thay đổi.');return;}
-      stream=microphone;const connection=peer=new RTCPeerConnection();
+      stream=microphone;
+      const engine=await liveEngine();
+      if(engine==='gemini'){await startGemini(run,microphone);return;}
+      if(engine!=='openai'){cleanup('Nói trực tiếp cần kết nối OpenAI chính thức hoặc Gemini gốc trong Cài đặt.');return;}
+      const connection=peer=new RTCPeerConnection();
       connectWave(stream);
       stream.getTracks().forEach(track=>connection.addTrack(track,stream));
       connection.addEventListener('track',event=>{
@@ -199,6 +206,83 @@
         : 'Không kết nối được cuộc trò chuyện trực tiếp. Kiểm tra mạng và thiết bị rồi thử lại.');
     }
   }
+  // The learner's saved connection decides the engine; admin stays on the server-keyed OpenAI path.
+  async function liveEngine() {
+    if(liveEngineCached)return liveEngineCached;
+    try {
+      const settings=await (await apiFetch('/api/ai/settings')).json(),own=settings?.own;
+      const host=protocol=>new URL((own?.base_url||'').trim()||settings?.bases?.[protocol]||'https://x').hostname;
+      if(settings?.is_admin)liveEngineCached='openai';
+      else if(own?.protocol==='gemini' && /(^|\.)generativelanguage\.googleapis\.com$/.test(host('gemini')))liveEngineCached='gemini';
+      else if(own?.protocol==='openai' && /(^|\.)openai\.com$/.test(host('openai')))liveEngineCached='openai';
+      else liveEngineCached='none';
+    } catch { liveEngineCached='none'; }
+    return liveEngineCached;
+  }
+  // Gemini Live: mic PCM 16kHz over a WebSocket, server audio 24kHz queued for playback.
+  async function startGemini(run,microphone) {
+    const context=globalThis.teacherContext?.();
+    const lesson=(typeof chatLessonContext!=='undefined'?chatLessonContext:null) || context?.lesson;
+    abort=new AbortController();
+    const response=await apiFetch('/api/live/gemini',{method:'POST',signal:abort.signal,headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({level:lesson?.level || activeCurriculumLevel || 'N5',lesson:lesson?{id:lesson.id,level:lesson.level}:null})});
+    const result=await response.json();
+    if(run!==version)return;
+    if(!response.ok)throw Object.assign(new Error(result.detail || 'Không mở được cuộc gọi.'),{userFacing:true});
+    commands=result.commands && typeof result.commands==='object'?result.commands:{};
+    const speakerContext=audioContext || new (window.AudioContext || window.webkitAudioContext)();
+    if(!audioContext){audioContext=speakerContext;audioContext.resume().catch(()=>{});}
+    connectWave(microphone);
+    const ratio=speakerContext.sampleRate/16000;
+    const socket=liveSocket=new WebSocket(result.ws+'?access_token='+encodeURIComponent(result.token));
+    socket.addEventListener('open',()=>{
+      if(run!==version)return;
+      socket.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:result.greeting}]}],turnComplete:true}}));
+    });
+    socket.addEventListener('message',async({data})=>{
+      if(run!==version)return;
+      let event;try{event=JSON.parse(typeof data==='string'?data:await data.text());}catch{return;}
+      if(event.setupComplete){ready=true;clearTimeout(connectTimer);controls(true);startedAt=Date.now();keepAwake();teacherExpectedUntil=Date.now()+4000;turn();
+        timer=setInterval(()=>{const seconds=Math.floor((Date.now()-startedAt)/1000);
+          el('live-duration').textContent=String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');
+          if(seconds>=600)end();},1000);
+        captureSource=speakerContext.createMediaStreamSource(microphone);
+        captureNode=speakerContext.createScriptProcessor(4096,1,1);
+        captureNode.onaudioprocess=e=>{
+          if(run!==version || socket.readyState!==1)return;
+          const input=e.inputBuffer.getChannelData(0),out=Math.floor(input.length/ratio),pcm=new Int16Array(out);
+          for(let i=0;i<out;i++){const s=input[Math.floor(i*ratio)];pcm[i]=Math.max(-1,Math.min(1,s))*32767;}
+          let bin='';for(let i=0;i<pcm.length;i++)bin+=String.fromCharCode(pcm[i]&255,pcm[i]>>8);
+          socket.send(JSON.stringify({realtimeInput:{audio:{data:btoa(bin),mimeType:'audio/pcm;rate=16000'}}}));
+        };
+        const muteGain=speakerContext.createGain();muteGain.gain.value=0;
+        captureSource.connect(captureNode);captureNode.connect(muteGain);muteGain.connect(speakerContext.destination);
+        return;
+      }
+      const content=event.serverContent;
+      if(content?.modelTurn?.parts)for(const part of content.modelTurn.parts){
+        const b64=part?.inlineData?.data;
+        if(!b64)continue;
+        teacherHeardAt=Date.now();teacherExpectedUntil=0;
+        const bin=atob(b64),pcm=new Int16Array(bin.length/2);
+        for(let i=0;i<pcm.length;i++)pcm[i]=bin.charCodeAt(i*2)|(bin.charCodeAt(i*2+1)<<8);
+        const floats=new Float32Array(pcm.length);for(let i=0;i<pcm.length;i++)floats[i]=pcm[i]/32768;
+        const buffer=speakerContext.createBuffer(1,floats.length,24000);buffer.getChannelData(0).set(floats);
+        const source=speakerContext.createBufferSource();source.buffer=buffer;
+        if(teacherAnalyser)source.connect(teacherAnalyser);
+        source.connect(speakerContext.destination);
+        nextPlayTime=Math.max(nextPlayTime,speakerContext.currentTime);source.start(nextPlayTime);nextPlayTime+=buffer.duration;
+      }
+      const now=Date.now()-startedAt;
+      if(content?.inputTranscription?.text)timeline.add({type:'session.input_transcript.delta',delta:content.inputTranscription.text,start_ms:Math.max(0,now-1500),end_ms:now});
+      if(content?.outputTranscription?.text)timeline.add({type:'session.output_transcript.delta',delta:content.outputTranscription.text,start_ms:Math.max(0,now-1500),end_ms:now});
+      if(event.goAway || content?.turnComplete===false)teacherHeardAt=Date.now();
+    });
+    socket.addEventListener('close',()=>{if(run===version)cleanup('Kết nối đã đóng.');});
+    socket.addEventListener('error',()=>{if(run===version)cleanup('Không kết nối được cuộc trò chuyện trực tiếp. Kiểm tra mạng và thiết bị rồi thử lại.');});
+    status('Đang kết nối với thầy…');
+    connectTimer=setTimeout(()=>{if(run===version)cleanup('Kết nối hết thời gian. Hãy thử lại.');},35000);
+  }
   function mode(live) {
     if(!live && (peer || el('live-start').disabled))end();
     if(!live)timeline.stop();
@@ -217,9 +301,10 @@
   });
   el('live-commands').addEventListener('click',event=>{
     const text=commands[event.target?.dataset?.command];
-    if(!text || !ready || closing || teacherSpeaking || channel?.readyState!=='open')return;
+    if(!text || !ready || closing || teacherSpeaking)return;
     teacherExpectedUntil=Date.now()+4000;turn();
-    channel.send(JSON.stringify({type:'session.commentary.append',event_id:'cmd_'+Date.now(),delegation_id:null,content:text}));
+    if(liveSocket?.readyState===1)liveSocket.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text}]}],turnComplete:true}}));
+    else if(channel?.readyState==='open')channel.send(JSON.stringify({type:'session.commentary.append',event_id:'cmd_'+Date.now(),delegation_id:null,content:text}));
   });
   el('live-mute').addEventListener('click',()=>{
     const mute=el('live-mute').getAttribute('aria-pressed')!=='true';
@@ -232,6 +317,7 @@
   window.addEventListener('pagehide',()=>{end(true);timeline.stop();});
   window.addEventListener('hashchange',()=>{if(!location.hash.startsWith('#classroom')){end();timeline.stop();}});
   window.checkLiveAccount=()=>{
+    liveEngineCached=null;
     timeline.accountChanged();
     if(!signedInUser || callOwner && callOwner!==signedInUser?.user_id)mode(false);
   };
